@@ -4,7 +4,7 @@ import statistics
 
 # ================= TELEGRAM =================
 TOKEN = "8329327841:AAE_oEg3pFrmVL3SAjiHe_VaU8AuoL5xdL0"
-CHAT_ID = "8329327841"
+CHAT_ID = "5019372975"
 
 def enviar_alerta(msg):
     try:
