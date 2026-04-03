@@ -24,12 +24,20 @@ entrada = 0
 max_precio = 0
 symbol_activo = None
 
-racha_perdidas = 0
-ganancia_acumulada = 0
-operaciones_totales = 0
-operaciones_ganadoras = 0
+# ===== RISK MANAGER =====
+capital = 1000
+riesgo_por_trade = 0.01
+drawdown_max = -0.05 * capital
 
-enviar_alerta("📊 <b>BOT CUANTITATIVO v3 ACTIVO</b>\n⏰ " + datetime.now().strftime("%H:%M:%S"))
+cooldown_symbol = {}
+
+# ===== STATS =====
+ganancia_total = 0
+operaciones = 0
+ganadoras = 0
+racha_perdidas = 0
+
+enviar_alerta("🏦 <b>BOT RISK MANAGER ACTIVO</b>")
 
 # ================= FUNCIONES =================
 
@@ -51,29 +59,6 @@ def ema(valores, n):
         resultado.append(v * k + resultado[-1] * (1 - k))
     return resultado
 
-def rsi(cierres, n=14):
-    ganancias, perdidas = [], []
-    for i in range(1, len(cierres)):
-        diff = cierres[i] - cierres[i-1]
-        ganancias.append(max(diff, 0))
-        perdidas.append(max(-diff, 0))
-    if len(ganancias) < n:
-        return 50
-    ag = sum(ganancias[-n:]) / n
-    ap = sum(perdidas[-n:]) / n
-    if ap == 0:
-        return 100
-    rs = ag / ap
-    return 100 - (100 / (1 + rs))
-
-def macd(cierres):
-    ema12 = ema(cierres, 12)
-    ema26 = ema(cierres, 26)
-    linea = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
-    senal = ema(linea, 9)
-    hist = [l - s for l, s in zip(linea, senal)]
-    return linea[-1], senal[-1], hist[-1], hist[-2]
-
 def atr(altos, bajos, cierres, n=14):
     trs = []
     for i in range(1, len(cierres)):
@@ -83,123 +68,112 @@ def atr(altos, bajos, cierres, n=14):
             abs(bajos[i] - cierres[i-1])
         )
         trs.append(tr)
-    if len(trs) < n:
-        return cierres[-1] * 0.002
-    return sum(trs[-n:]) / n
+    return sum(trs[-n:]) / n if len(trs) >= n else cierres[-1]*0.002
 
-def bollinger(cierres, n=20, dev=2):
-    ventana = cierres[-n:]
-    media = sum(ventana) / n
-    std = math.sqrt(sum((x - media)**2 for x in ventana) / n)
-    return media, media + dev * std, media - dev * std
+def detectar_pullback(c):
+    return c[-5] < c[-4] < c[-3] and c[-3] > c[-2] and c[-1] > c[-2]
 
-def volumen_alto(volumenes, n=20):
-    vol_actual = volumenes[-1]
-    vol_prom = sum(volumenes[-n:-1]) / (n - 1)
-    return vol_actual > vol_prom * 1.2
+def volumen_alto(v):
+    return v[-1] > sum(v[-20:-1]) / 19 * 1.2
 
-def tendencia_ema(cierres):
-    return ema(cierres, 9)[-1] > ema(cierres, 21)[-1]
-
-def slope_ema(cierres):
-    e = ema(cierres, 9)
-    return e[-1] > e[-3]
-
-def detectar_pullback(cierres):
-    subida = cierres[-5] < cierres[-4] < cierres[-3]
-    retroceso = cierres[-3] > cierres[-2]
-    confirmacion = cierres[-1] > cierres[-2] and cierres[-2] > cierres[-3]
-    e9 = ema(cierres, 9)
-    soporte = cierres[-1] >= e9[-1] * 0.999
-    return subida and retroceso and confirmacion and soporte
-
-# ================= SCORE =================
-
-def score(cierres, altos, bajos, volumenes, precio):
+def score(c, a, b, v, precio):
     s = 0
-    detalles = []
 
-    if tendencia_ema(cierres):
-        s += 2; detalles.append("EMA")
+    if ema(c,9)[-1] > ema(c,21)[-1]:
+        s += 2
+    if detectar_pullback(c):
+        s += 2
+    if volumen_alto(v):
+        s += 3
+    if (c[-1] - c[-2]) > (0.0004 * precio):
+        s += 2
+    if (c[-1] - c[-5]) > (0.0005 * precio):
+        s += 1
 
-    if slope_ema(cierres):
-        s += 1; detalles.append("Slope")
+    return s
 
-    if detectar_pullback(cierres):
-        s += 2; detalles.append("PB")
-
-    r = rsi(cierres)
-    if 45 <= r <= 68:
-        s += 2; detalles.append("RSI")
-    elif r > 68:
-        s -= 1
-
-    linea, senal, hist, hist_prev = macd(cierres)
-    if linea > senal:
-        s += 1; detalles.append("MACD")
-    if hist > 0 and hist > hist_prev:
-        s += 1; detalles.append("Hist")
-
-    if volumen_alto(volumenes):
-        s += 3; detalles.append("VOL")
-
-    bb_media, _, _ = bollinger(cierres)
-    if cierres[-1] > bb_media:
-        s += 1; detalles.append("BB")
-
-    cambio_5 = (cierres[-1] - cierres[-5]) / cierres[-5]
-    if 0.0005 < cambio_5 < 0.01:
-        s += 1; detalles.append("MOM")
-
-    return s, detalles, r
+def stats_msg():
+    winrate = (ganadoras / operaciones * 100) if operaciones > 0 else 0
+    return f"""
+📊 <b>STATS</b>
+💰 PnL: {ganancia_total:.2f}
+📈 Trades: {operaciones}
+🏆 Winrate: {winrate:.1f}%
+📉 Racha pérdidas: {racha_perdidas}
+"""
 
 # ================= LOOP =================
 
 while True:
     try:
 
+        # ===== CONTROL DRAWDOWN =====
+        if ganancia_total <= drawdown_max:
+            enviar_alerta("🛑 STOP GLOBAL POR DRAWDOWN")
+            time.sleep(300)
+            continue
+
+        # ===== GESTIÓN =====
         if estado:
-            cierres, altos, bajos, volumenes = get_klines(symbol_activo, "1m", 20)
-            precio = cierres[-1]
+            c, a, b, v = get_klines(symbol_activo, "1m", 20)
+            precio = c[-1]
 
             ganancia = precio - entrada
             if precio > max_precio:
                 max_precio = precio
 
-            atr_val = atr(altos, bajos, cierres)
+            atr_val = atr(a, b, c)
 
             sl = max(
-                min(cierres[-5:]),
+                min(c[-5:]),
                 entrada - (1.5 * atr_val),
-                entrada - (0.002 * entrada)
+                entrada - (0.0015 * entrada)  # SL CAP
             )
 
             riesgo = entrada - sl
-            tp1 = entrada + riesgo * 1.5
-            tp2 = entrada + riesgo * 2.0  # ajustado
+            tp = entrada + riesgo * 2
 
             trailing = (max_precio - entrada) * 0.4
 
             if precio <= sl:
-                enviar_alerta(f"🛑 SL {symbol_activo}\n{precio:.4f}\n{ganancia:.4f}")
                 estado = False
+                operaciones += 1
+                ganancia_total += ganancia
                 racha_perdidas += 1
 
-            elif precio >= tp2:
-                enviar_alerta(f"💰 TP2 {symbol_activo}\n+{ganancia:.4f}")
+                enviar_alerta(f"🛑 SL {symbol_activo}\n{ganancia:.4f}\n{stats_msg()}")
+
+                cooldown_symbol[symbol_activo] = time.time()
+
+            elif precio >= tp:
                 estado = False
+                operaciones += 1
+                ganadoras += 1
+                ganancia_total += ganancia
                 racha_perdidas = 0
 
+                enviar_alerta(f"💰 TP {symbol_activo}\n+{ganancia:.4f}\n{stats_msg()}")
+
+                cooldown_symbol[symbol_activo] = time.time()
+
             elif max_precio - precio >= trailing and ganancia > 0:
-                enviar_alerta(f"💰 TRAILING {symbol_activo}\n+{ganancia:.4f}")
                 estado = False
+                operaciones += 1
+                ganadoras += 1
+                ganancia_total += ganancia
                 racha_perdidas = 0
+
+                enviar_alerta(f"💰 TRAILING {symbol_activo}\n+{ganancia:.4f}\n{stats_msg()}")
+
+                cooldown_symbol[symbol_activo] = time.time()
 
             time.sleep(5)
             continue
 
-        if racha_perdidas >= 2:
-            time.sleep(90)
+        # ===== PAUSA POR RACHAS =====
+        if racha_perdidas >= 3:
+            enviar_alerta("⛔ PAUSA POR MAL RENDIMIENTO")
+            time.sleep(120)
             racha_perdidas = 0
             continue
 
@@ -207,39 +181,39 @@ while True:
         mejor_score = 0
 
         for symbol in symbols:
-            try:
-                c, a, b, v = get_klines(symbol, "1m", 50)
-                precio = c[-1]
 
-                # ===== FILTROS NUEVOS =====
-
-                # anti explosión
-                if (c[-1] - c[-2]) / c[-2] > 0.002:
+            if symbol in cooldown_symbol:
+                if time.time() - cooldown_symbol[symbol] < 30:
                     continue
 
-                # distancia EMA
-                if (precio - ema(c, 9)[-1]) / precio > 0.0015:
-                    continue
+            c, a, b, v = get_klines(symbol, "1m", 50)
+            precio = c[-1]
 
-                # fuerza mínima
-                if (c[-1] - c[-2]) < (0.0004 * precio):
-                    continue
+            # ===== FILTROS =====
 
-                s, det, r = score(c, a, b, v, precio)
-
-                if s > mejor_score:
-                    mejor_score = s
-                    mejor = (symbol, precio, c, a, b)
-
-            except:
+            # anti FOMO
+            if (c[-1] - c[-2]) / c[-2] > 0.002:
                 continue
+
+            # volatilidad BTC extra
+            if symbol == "BTCUSDT":
+                if (c[-1] - c[-3]) / c[-3] > 0.003:
+                    continue
+
+            s = score(c, a, b, v, precio)
+
+            if s > mejor_score:
+                mejor_score = s
+                mejor = (symbol, precio, c, a, b)
 
         if mejor and mejor_score >= 9:
             symbol_activo, entrada, c, a, b = mejor
             max_precio = entrada
             estado = True
 
-            enviar_alerta(f"🚀 ENTRY {symbol_activo}\n{entrada:.4f}\nScore {mejor_score}")
+            enviar_alerta(
+                f"🚀 ENTRY {symbol_activo}\n{entrada:.4f}\nScore {mejor_score}\n{stats_msg()}"
+            )
 
         time.sleep(5)
 
