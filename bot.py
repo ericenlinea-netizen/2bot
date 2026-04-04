@@ -35,11 +35,18 @@ tp_actual = 0.0
 hora_entrada = None
 score_entrada = 0
 
-# ===== PARAMETROS =====
-score_minimo_entrada = 7
+# ===== PARAMETROS ESTRATEGIA =====
+score_minimo_entrada = 9
+
+# ===== PARAMETROS DE TRADING REAL =====
+capital_inicial = 1000.0
+margen_por_trade = 10.0
+apalancamiento = 10.0
+notional_por_trade = margen_por_trade * apalancamiento
+fee_rate = 0.0004  # 0.04% por lado; ajusta según exchange
+usar_fees = True
 
 # ===== RISK MANAGER =====
-capital_inicial = 1000.0
 riesgo_por_trade = 0.01
 drawdown_max = -0.05 * capital_inicial
 cooldown_symbol = {}
@@ -92,7 +99,7 @@ def fmt_price(n):
 
 def fmt_money(n):
     signo = "+" if n >= 0 else ""
-    return f"{signo}{n:.2f}"
+    return f"{signo}{n:.2f} USD"
 
 
 def fmt_pct(n):
@@ -129,43 +136,70 @@ def duracion_trade():
     return f"{minutos}m {segundos}s"
 
 
+def precio_a_pct(precio_entrada, precio_actual):
+    if precio_entrada <= 0:
+        return 0.0
+    return ((precio_actual - precio_entrada) / precio_entrada) * 100
+
+
+def calcular_fees():
+    if not usar_fees:
+        return 0.0
+    return notional_por_trade * fee_rate * 2
+
+
+def calcular_pnl_usd(precio_entrada, precio_salida):
+    if precio_entrada <= 0:
+        return 0.0, 0.0, 0.0
+
+    variacion_pct = (precio_salida - precio_entrada) / precio_entrada
+    pnl_bruto = variacion_pct * notional_por_trade
+    fees = calcular_fees()
+    pnl_neto = pnl_bruto - fees
+    pnl_pct_trade = (pnl_neto / margen_por_trade) * 100 if margen_por_trade > 0 else 0.0
+
+    return pnl_neto, pnl_pct_trade, fees
+
+
 def pnl_actual_trade(precio):
     if not estado:
         return 0.0, 0.0
-    pnl = precio - entrada
-    pct = ((precio - entrada) / entrada) * 100 if entrada else 0.0
-    return pnl, pct
+    pnl, pnl_pct_trade, _ = calcular_pnl_usd(entrada, precio)
+    return pnl, pnl_pct_trade
 
 
 def riesgo_actual():
     if entrada <= 0 or sl_actual <= 0:
-        return 0.0, 0.0
-    riesgo = entrada - sl_actual
-    riesgo_pct = (riesgo / entrada) * 100
-    return riesgo, riesgo_pct
+        return 0.0, 0.0, 0.0
+    riesgo_pct_precio = ((entrada - sl_actual) / entrada) * 100
+    riesgo_usd = (riesgo_pct_precio / 100) * notional_por_trade
+    if usar_fees:
+        riesgo_usd += calcular_fees()
+    riesgo_pct_margen = (riesgo_usd / margen_por_trade) * 100 if margen_por_trade > 0 else 0.0
+    return riesgo_usd, riesgo_pct_precio, riesgo_pct_margen
 
 
 def beneficio_objetivo():
     if entrada <= 0 or tp_actual <= 0:
-        return 0.0, 0.0
-    beneficio = tp_actual - entrada
-    beneficio_pct = (beneficio / entrada) * 100
-    return beneficio, beneficio_pct
+        return 0.0, 0.0, 0.0
+    beneficio_pct_precio = ((tp_actual - entrada) / entrada) * 100
+    beneficio_usd = (beneficio_pct_precio / 100) * notional_por_trade
+    if usar_fees:
+        beneficio_usd -= calcular_fees()
+    beneficio_pct_margen = (beneficio_usd / margen_por_trade) * 100 if margen_por_trade > 0 else 0.0
+    return beneficio_usd, beneficio_pct_precio, beneficio_pct_margen
 
 
 def actualizar_extremos_trade(pnl):
     global mejor_ganancia, peor_perdida
-
     if mejor_ganancia is None or pnl > mejor_ganancia:
         mejor_ganancia = pnl
-
     if peor_perdida is None or pnl < peor_perdida:
         peor_perdida = pnl
 
 
 def revisar_reset_diario():
     global fecha_actual_stats, ganancia_dia, operaciones_dia, ganadoras_dia
-
     hoy = date.today()
     if hoy != fecha_actual_stats:
         fecha_actual_stats = hoy
@@ -201,13 +235,10 @@ def registrar_trade(symbol, pnl, fue_ganadora, tipo):
     ss = stats_symbol[symbol]
     ss["trades"] += 1
     ss["pnl"] += pnl
-
     if fue_ganadora:
         ss["wins"] += 1
-
     if ss["best"] is None or pnl > ss["best"]:
         ss["best"] = pnl
-
     if ss["worst"] is None or pnl < ss["worst"]:
         ss["worst"] = pnl
 
@@ -222,19 +253,11 @@ def resumen_symbol(symbol):
 
 
 def top_symbols_msg():
-    ranking = sorted(
-        stats_symbol.items(),
-        key=lambda x: x[1]["pnl"],
-        reverse=True
-    )
-
+    ranking = sorted(stats_symbol.items(), key=lambda x: x[1]["pnl"], reverse=True)
     lineas = []
     for symbol, ss in ranking[:3]:
         wr = (ss["wins"] / ss["trades"] * 100) if ss["trades"] > 0 else 0.0
-        lineas.append(
-            f"• <b>{symbol}</b>: {fmt_money(ss['pnl'])} | {ss['trades']} trades | WR {wr:.1f}%"
-        )
-
+        lineas.append(f"• <b>{symbol}</b>: {fmt_money(ss['pnl'])} | {ss['trades']} trades | WR {wr:.1f}%")
     return "\n".join(lineas) if lineas else "Sin datos"
 
 
@@ -257,12 +280,12 @@ def resumen_general():
 
 def resumen_diario():
     return (
-        f"📅 <b>RESUMEN DEL DIA</b>\n"
-        f"💰 <b>PnL dia:</b> {fmt_money(ganancia_dia)}\n"
-        f"📈 <b>Trades dia:</b> {operaciones_dia}\n"
-        f"🏆 <b>Ganadoras dia:</b> {ganadoras_dia}\n"
-        f"❌ <b>Perdedoras dia:</b> {perdedoras_dia()}\n"
-        f"🎯 <b>Winrate dia:</b> {winrate_dia():.1f}%"
+        f"📅 <b>RESUMEN DEL DÍA</b>\n"
+        f"💰 <b>PnL día:</b> {fmt_money(ganancia_dia)}\n"
+        f"📈 <b>Trades día:</b> {operaciones_dia}\n"
+        f"🏆 <b>Ganadoras día:</b> {ganadoras_dia}\n"
+        f"❌ <b>Perdedoras día:</b> {perdedoras_dia()}\n"
+        f"🎯 <b>Winrate día:</b> {winrate_dia():.1f}%"
     )
 
 
@@ -273,18 +296,18 @@ def panel_trade_activo(precio_actual=None):
     if precio_actual is None:
         precio_actual = entrada
 
-    pnl, pnl_pct = pnl_actual_trade(precio_actual)
-    riesgo, riesgo_pct = riesgo_actual()
-    beneficio, beneficio_pct = beneficio_objetivo()
+    pnl, pnl_pct_trade = pnl_actual_trade(precio_actual)
+    riesgo_usd, riesgo_pct_precio, riesgo_pct_margen = riesgo_actual()
+    beneficio_usd, beneficio_pct_precio, beneficio_pct_margen = beneficio_objetivo()
 
     return (
         f"🟢 <b>TRADE ACTIVO</b>\n"
         f"🪙 <b>Activo:</b> {symbol_activo}\n"
         f"💵 <b>Entrada:</b> {fmt_price(entrada)}\n"
         f"📍 <b>Precio actual:</b> {fmt_price(precio_actual)}\n"
-        f"📈 <b>PnL flotante:</b> {fmt_money(pnl)} ({fmt_pct(pnl_pct)})\n"
-        f"🛡 <b>SL:</b> {fmt_price(sl_actual)} ({fmt_pct(-riesgo_pct)})\n"
-        f"🎯 <b>TP:</b> {fmt_price(tp_actual)} ({fmt_pct(beneficio_pct)})\n"
+        f"📈 <b>PnL flotante:</b> {fmt_money(pnl)} ({fmt_pct(pnl_pct_trade)})\n"
+        f"🛡 <b>SL:</b> {fmt_price(sl_actual)} | Riesgo aprox: {fmt_money(-riesgo_usd)} ({fmt_pct(-riesgo_pct_margen)})\n"
+        f"🎯 <b>TP:</b> {fmt_price(tp_actual)} | Objetivo aprox: {fmt_money(beneficio_usd)} ({fmt_pct(beneficio_pct_margen)})\n"
         f"⬆️ <b>Máximo:</b> {fmt_price(max_precio)}\n"
         f"📊 <b>Score entrada:</b> {score_entrada}\n"
         f"⏱ <b>Duración:</b> {duracion_trade()}"
@@ -296,7 +319,10 @@ def msg_inicio():
         f"🏦 <b>BOT RISK MANAGER ACTIVO</b>\n\n"
         f"🕒 <b>Inicio:</b> {ahora()}\n"
         f"💼 <b>Capital inicial:</b> {fmt_money(capital_inicial)}\n"
-        f"⚠️ <b>Riesgo por trade:</b> {riesgo_por_trade * 100:.1f}%\n"
+        f"💸 <b>Margen por trade:</b> {fmt_money(margen_por_trade)}\n"
+        f"⚡ <b>Apalancamiento:</b> {apalancamiento:.1f}x\n"
+        f"📦 <b>Notional:</b> {fmt_money(notional_por_trade)}\n"
+        f"🧾 <b>Fees activas:</b> {'Sí' if usar_fees else 'No'}\n"
         f"🛑 <b>Drawdown máx:</b> {fmt_money(drawdown_max)}\n"
         f"🎯 <b>Score mínimo entrada:</b> {score_minimo_entrada}\n"
         f"🪙 <b>Símbolos:</b> {', '.join(symbols)}"
@@ -304,16 +330,15 @@ def msg_inicio():
 
 
 def msg_entry(symbol, precio_entrada, sl, tp, score_val):
-    riesgo = precio_entrada - sl
-    riesgo_pct = (riesgo / precio_entrada) * 100 if precio_entrada else 0.0
-    beneficio_pct = ((tp - precio_entrada) / precio_entrada) * 100 if precio_entrada else 0.0
+    riesgo_usd, _, riesgo_pct_margen = riesgo_actual()
+    beneficio_usd, _, beneficio_pct_margen = beneficio_objetivo()
 
     return (
         f"🚀 <b>NUEVA ENTRADA</b>\n\n"
         f"🪙 <b>Activo:</b> {symbol}\n"
         f"💵 <b>Entrada:</b> {fmt_price(precio_entrada)}\n"
-        f"🛡 <b>SL:</b> {fmt_price(sl)} ({fmt_pct(-riesgo_pct)})\n"
-        f"🎯 <b>TP:</b> {fmt_price(tp)} ({fmt_pct(beneficio_pct)})\n"
+        f"🛡 <b>SL:</b> {fmt_price(sl)} | Riesgo aprox: {fmt_money(-riesgo_usd)} ({fmt_pct(-riesgo_pct_margen)})\n"
+        f"🎯 <b>TP:</b> {fmt_price(tp)} | Objetivo aprox: {fmt_money(beneficio_usd)} ({fmt_pct(beneficio_pct_margen)})\n"
         f"📈 <b>Score:</b> {score_val}\n"
         f"🕒 <b>Hora:</b> {ahora()}\n\n"
         f"{resumen_general()}\n\n"
@@ -322,16 +347,18 @@ def msg_entry(symbol, precio_entrada, sl, tp, score_val):
     )
 
 
-def msg_close(tipo, symbol, precio_entrada, precio_salida, pnl):
-    pct = ((precio_salida - precio_entrada) / precio_entrada) * 100 if precio_entrada else 0.0
-    emoji = "💰" if pnl >= 0 else "🛑"
+def msg_close(tipo, symbol, precio_entrada, precio_salida, pnl_usd, pnl_pct_trade, fees):
+    emoji = "💰" if pnl_usd >= 0 else "🛑"
+    movimiento_precio_pct = precio_a_pct(precio_entrada, precio_salida)
 
     return (
         f"{emoji} <b>{tipo}</b>\n\n"
         f"🪙 <b>Activo:</b> {symbol}\n"
         f"💵 <b>Entrada:</b> {fmt_price(precio_entrada)}\n"
         f"💸 <b>Salida:</b> {fmt_price(precio_salida)}\n"
-        f"📊 <b>PnL trade:</b> {fmt_money(pnl)} ({fmt_pct(pct)})\n"
+        f"📊 <b>Movimiento precio:</b> {fmt_pct(movimiento_precio_pct)}\n"
+        f"💰 <b>PnL trade:</b> {fmt_money(pnl_usd)} ({fmt_pct(pnl_pct_trade)})\n"
+        f"🧾 <b>Fees estimadas:</b> {fmt_money(-fees if fees else 0.0)}\n"
         f"⏱ <b>Duración:</b> {duracion_trade()}\n"
         f"🕒 <b>Cierre:</b> {ahora()}\n\n"
         f"{resumen_general()}\n\n"
@@ -496,7 +523,6 @@ def calcular_sl_tp(c, a, b, precio_entrada):
 # ================= INICIO =================
 enviar_alerta(msg_inicio())
 
-
 # ================= LOOP =================
 while True:
     try:
@@ -518,12 +544,12 @@ while True:
                 enviar_alerta(msg_resumen_periodico(precio))
                 ultimo_reporte = time.time()
 
-            ganancia = precio - entrada
+            pnl_usd, pnl_pct_trade, fees = calcular_pnl_usd(entrada, precio)
             trailing = (max_precio - entrada) * 0.4
 
             if precio <= sl_actual:
-                registrar_trade(symbol_activo, ganancia, False, "STOP LOSS")
-                enviar_alerta(msg_close("STOP LOSS", symbol_activo, entrada, precio, ganancia))
+                registrar_trade(symbol_activo, pnl_usd, False, "STOP LOSS")
+                enviar_alerta(msg_close("STOP LOSS", symbol_activo, entrada, precio, pnl_usd, pnl_pct_trade, fees))
                 cooldown_symbol[symbol_activo] = time.time()
 
                 estado = False
@@ -532,8 +558,8 @@ while True:
                 score_entrada = 0
 
             elif precio >= tp_actual:
-                registrar_trade(symbol_activo, ganancia, True, "TAKE PROFIT")
-                enviar_alerta(msg_close("TAKE PROFIT", symbol_activo, entrada, precio, ganancia))
+                registrar_trade(symbol_activo, pnl_usd, True, "TAKE PROFIT")
+                enviar_alerta(msg_close("TAKE PROFIT", symbol_activo, entrada, precio, pnl_usd, pnl_pct_trade, fees))
                 cooldown_symbol[symbol_activo] = time.time()
 
                 estado = False
@@ -541,9 +567,9 @@ while True:
                 hora_entrada = None
                 score_entrada = 0
 
-            elif max_precio - precio >= trailing and ganancia > 0:
-                registrar_trade(symbol_activo, ganancia, True, "TRAILING STOP")
-                enviar_alerta(msg_close("TRAILING STOP", symbol_activo, entrada, precio, ganancia))
+            elif max_precio - precio >= trailing and pnl_usd > 0:
+                registrar_trade(symbol_activo, pnl_usd, True, "TRAILING STOP")
+                enviar_alerta(msg_close("TRAILING STOP", symbol_activo, entrada, precio, pnl_usd, pnl_pct_trade, fees))
                 cooldown_symbol[symbol_activo] = time.time()
 
                 estado = False
@@ -575,11 +601,9 @@ while True:
             c, a, b, v = get_klines(symbol, "1m", 50)
             precio = c[-1]
 
-            # anti-FOMO
             if (c[-1] - c[-2]) / c[-2] > 0.002:
                 continue
 
-            # filtro extra BTC
             if symbol == "BTCUSDT" and (c[-1] - c[-3]) / c[-3] > 0.003:
                 continue
 
@@ -596,14 +620,7 @@ while True:
             and time.time() - ultimo_debug > intervalo_debug
             and mejor_score < score_minimo_entrada
         ):
-            enviar_alerta(
-                msg_debug(
-                    mejor_debug[0],
-                    mejor_debug[1],
-                    mejor_debug[2],
-                    mejor_debug[3]
-                )
-            )
+            enviar_alerta(msg_debug(mejor_debug[0], mejor_debug[1], mejor_debug[2], mejor_debug[3]))
             ultimo_debug = time.time()
 
         if mejor and mejor_score >= score_minimo_entrada:
