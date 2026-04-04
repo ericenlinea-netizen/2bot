@@ -36,7 +36,7 @@ hora_entrada = None
 score_entrada = 0
 
 # ===== PARAMETROS ESTRATEGIA =====
-score_minimo_entrada = 7
+score_minimo_entrada = 9
 
 # ===== PARAMETROS DE TRADING REAL =====
 capital_inicial = 1000.0
