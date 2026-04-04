@@ -35,6 +35,9 @@ tp_actual = 0.0
 hora_entrada = None
 score_entrada = 0
 
+# ===== PARAMETROS =====
+score_minimo_entrada = 9
+
 # ===== RISK MANAGER =====
 capital_inicial = 1000.0
 riesgo_por_trade = 0.01
@@ -71,7 +74,11 @@ stats_symbol = {
 
 # ===== REPORTES =====
 ultimo_reporte = 0
-intervalo_reporte = 1800  # 30 minutos
+intervalo_reporte = 1800  # 30 min
+
+# ===== DEBUG SUAVE =====
+ultimo_debug = 0
+intervalo_debug = 900  # 15 min
 
 
 # ================= HELPERS =================
@@ -194,6 +201,7 @@ def registrar_trade(symbol, pnl, fue_ganadora, tipo):
     ss = stats_symbol[symbol]
     ss["trades"] += 1
     ss["pnl"] += pnl
+
     if fue_ganadora:
         ss["wins"] += 1
 
@@ -277,9 +285,9 @@ def panel_trade_activo(precio_actual=None):
         f"📈 <b>PnL flotante:</b> {fmt_money(pnl)} ({fmt_pct(pnl_pct)})\n"
         f"🛡 <b>SL:</b> {fmt_price(sl_actual)} ({fmt_pct(-riesgo_pct)})\n"
         f"🎯 <b>TP:</b> {fmt_price(tp_actual)} ({fmt_pct(beneficio_pct)})\n"
-        f"⬆️ <b>Maximo:</b> {fmt_price(max_precio)}\n"
+        f"⬆️ <b>Máximo:</b> {fmt_price(max_precio)}\n"
         f"📊 <b>Score entrada:</b> {score_entrada}\n"
-        f"⏱ <b>Duracion:</b> {duracion_trade()}"
+        f"⏱ <b>Duración:</b> {duracion_trade()}"
     )
 
 
@@ -289,8 +297,9 @@ def msg_inicio():
         f"🕒 <b>Inicio:</b> {ahora()}\n"
         f"💼 <b>Capital inicial:</b> {fmt_money(capital_inicial)}\n"
         f"⚠️ <b>Riesgo por trade:</b> {riesgo_por_trade * 100:.1f}%\n"
-        f"🛑 <b>Drawdown max:</b> {fmt_money(drawdown_max)}\n"
-        f"🪙 <b>Simbolos:</b> {', '.join(symbols)}"
+        f"🛑 <b>Drawdown máx:</b> {fmt_money(drawdown_max)}\n"
+        f"🎯 <b>Score mínimo entrada:</b> {score_minimo_entrada}\n"
+        f"🪙 <b>Símbolos:</b> {', '.join(symbols)}"
     )
 
 
@@ -323,7 +332,7 @@ def msg_close(tipo, symbol, precio_entrada, precio_salida, pnl):
         f"💵 <b>Entrada:</b> {fmt_price(precio_entrada)}\n"
         f"💸 <b>Salida:</b> {fmt_price(precio_salida)}\n"
         f"📊 <b>PnL trade:</b> {fmt_money(pnl)} ({fmt_pct(pct)})\n"
-        f"⏱ <b>Duracion:</b> {duracion_trade()}\n"
+        f"⏱ <b>Duración:</b> {duracion_trade()}\n"
         f"🕒 <b>Cierre:</b> {ahora()}\n\n"
         f"{resumen_general()}\n\n"
         f"{resumen_diario()}\n\n"
@@ -334,7 +343,7 @@ def msg_close(tipo, symbol, precio_entrada, precio_salida, pnl):
 def msg_pausa():
     return (
         f"⛔ <b>PAUSA POR MAL RENDIMIENTO</b>\n\n"
-        f"📉 <b>Racha de perdidas:</b> {racha_perdidas}\n"
+        f"📉 <b>Racha de pérdidas:</b> {racha_perdidas}\n"
         f"🕒 <b>Hora:</b> {ahora()}\n\n"
         f"{resumen_general()}\n\n"
         f"{resumen_diario()}"
@@ -345,7 +354,7 @@ def msg_drawdown():
     return (
         f"🛑 <b>STOP GLOBAL POR DRAWDOWN</b>\n\n"
         f"💰 <b>PnL acumulado:</b> {fmt_money(ganancia_total)}\n"
-        f"⚠️ <b>Limite drawdown:</b> {fmt_money(drawdown_max)}\n"
+        f"⚠️ <b>Límite drawdown:</b> {fmt_money(drawdown_max)}\n"
         f"🕒 <b>Hora:</b> {ahora()}\n\n"
         f"{resumen_general()}\n\n"
         f"{resumen_diario()}"
@@ -354,19 +363,34 @@ def msg_drawdown():
 
 def msg_resumen_periodico(precio_actual=None):
     return (
-        f"🧾 <b>RESUMEN PERIODICO</b>\n\n"
+        f"🧾 <b>RESUMEN PERIÓDICO</b>\n\n"
         f"{panel_trade_activo(precio_actual)}\n\n"
         f"{resumen_general()}\n\n"
         f"{resumen_diario()}\n\n"
-        f"🥇 <b>TOP SIMBOLOS</b>\n"
+        f"🥇 <b>TOP SÍMBOLOS</b>\n"
         f"{top_symbols_msg()}\n\n"
         f"🕒 <b>Hora:</b> {ahora()}"
     )
 
 
+def msg_debug(symbol, precio, s, faltantes):
+    faltan_txt = ", ".join(faltantes[:4]) if faltantes else "ninguna"
+    return (
+        f"🔎 <b>DEBUG DE ESCANEO</b>\n\n"
+        f"🪙 <b>Mejor símbolo:</b> {symbol}\n"
+        f"💵 <b>Precio:</b> {fmt_price(precio)}\n"
+        f"📈 <b>Score actual:</b> {s}\n"
+        f"🎯 <b>Score requerido:</b> {score_minimo_entrada}\n"
+        f"🧩 <b>Faltó:</b> {faltan_txt}\n"
+        f"🕒 <b>Hora:</b> {ahora()}\n\n"
+        f"{resumen_general()}\n\n"
+        f"{resumen_diario()}"
+    )
+
+
 def msg_error(err):
     return (
-        f"⚠️ <b>ERROR EN EJECUCION</b>\n\n"
+        f"⚠️ <b>ERROR EN EJECUCIÓN</b>\n\n"
         f"<code>{str(err)[:300]}</code>\n"
         f"🕒 <b>Hora:</b> {ahora()}"
     )
@@ -381,7 +405,7 @@ def get_klines(symbol, interval, limit=50):
     data = r.json()
 
     if not isinstance(data, list) or len(data) == 0:
-        raise ValueError(f"Respuesta invalida de Binance para {symbol}: {data}")
+        raise ValueError(f"Respuesta inválida de Binance para {symbol}: {data}")
 
     cierres = [float(x[4]) for x in data]
     altos = [float(x[2]) for x in data]
@@ -421,21 +445,38 @@ def volumen_alto(v):
     return v[-1] > promedio * 1.2
 
 
-def score(c, a, b, v, precio):
-    s = 0
+def razones_score(c, a, b, v, precio):
+    ema_ok = ema(c, 9)[-1] > ema(c, 21)[-1]
+    pullback_ok = detectar_pullback(c)
+    vol_ok = volumen_alto(v)
+    mom1_ok = (c[-1] - c[-2]) > (0.0004 * precio)
+    mom2_ok = (c[-1] - c[-5]) > (0.0005 * precio)
 
-    if ema(c, 9)[-1] > ema(c, 21)[-1]:
+    s = 0
+    if ema_ok:
         s += 2
-    if detectar_pullback(c):
+    if pullback_ok:
         s += 2
-    if volumen_alto(v):
+    if vol_ok:
         s += 3
-    if (c[-1] - c[-2]) > (0.0004 * precio):
+    if mom1_ok:
         s += 2
-    if (c[-1] - c[-5]) > (0.0005 * precio):
+    if mom2_ok:
         s += 1
 
-    return s
+    faltantes = []
+    if not ema_ok:
+        faltantes.append("EMA 9>21")
+    if not pullback_ok:
+        faltantes.append("pullback")
+    if not vol_ok:
+        faltantes.append("volumen alto")
+    if not mom1_ok:
+        faltantes.append("momentum corto")
+    if not mom2_ok:
+        faltantes.append("momentum extendido")
+
+    return s, faltantes
 
 
 def calcular_sl_tp(c, a, b, precio_entrada):
@@ -525,6 +566,7 @@ while True:
 
         mejor = None
         mejor_score = 0
+        mejor_debug = None
 
         for symbol in symbols:
             if symbol in cooldown_symbol and time.time() - cooldown_symbol[symbol] < 30:
@@ -533,19 +575,38 @@ while True:
             c, a, b, v = get_klines(symbol, "1m", 50)
             precio = c[-1]
 
+            # anti-FOMO
             if (c[-1] - c[-2]) / c[-2] > 0.002:
                 continue
 
+            # filtro extra BTC
             if symbol == "BTCUSDT" and (c[-1] - c[-3]) / c[-3] > 0.003:
                 continue
 
-            s = score(c, a, b, v, precio)
+            s, faltantes = razones_score(c, a, b, v, precio)
 
             if s > mejor_score:
                 mejor_score = s
                 mejor = (symbol, precio, c, a, b)
+                mejor_debug = (symbol, precio, s, faltantes)
 
-        if mejor and mejor_score >= 9:
+        if (
+            not estado
+            and mejor_debug
+            and time.time() - ultimo_debug > intervalo_debug
+            and mejor_score < score_minimo_entrada
+        ):
+            enviar_alerta(
+                msg_debug(
+                    mejor_debug[0],
+                    mejor_debug[1],
+                    mejor_debug[2],
+                    mejor_debug[3]
+                )
+            )
+            ultimo_debug = time.time()
+
+        if mejor and mejor_score >= score_minimo_entrada:
             symbol_activo, entrada, c, a, b = mejor
             max_precio = entrada
             sl_actual, tp_actual = calcular_sl_tp(c, a, b, entrada)
