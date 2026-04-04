@@ -36,7 +36,7 @@ hora_entrada = None
 score_entrada = 0
 
 # ===== PARAMETROS =====
-score_minimo_entrada = 9
+score_minimo_entrada = 7
 
 # ===== RISK MANAGER =====
 capital_inicial = 1000.0
