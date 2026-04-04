@@ -4,8 +4,8 @@ import time
 from datetime import datetime, date
 
 # ================= TELEGRAM =================
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "PON_AQUI_TU_TOKEN_NUEVO")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "PON_AQUI_TU_CHAT_ID")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8329327841:AAE_oEg3pFrmVL3SAjiHe_VaU8AuoL5xdL0")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "5019372975")
 
 
 def enviar_alerta(msg):
